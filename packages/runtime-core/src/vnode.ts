@@ -4,30 +4,27 @@ import {
   isString,
   isObject,
   EMPTY_ARR,
-  extend
+  extend,
+  PatchFlags
 } from '@vue/shared'
-import {
-  ComponentInternalInstance,
-  Data,
-  SetupProxySymbol,
-  Component
-} from './component'
+import { ComponentInternalInstance, Data, SetupProxySymbol } from './component'
 import { RawSlots } from './componentSlots'
 import { ShapeFlags } from './shapeFlags'
 import { isReactive } from '@vue/reactivity'
 import { AppContext } from './apiApp'
 import { SuspenseBoundary } from './suspense'
-import { DirectiveBinding } from './directives'
 
-export const Fragment = Symbol(__DEV__ ? 'Fragment' : undefined)
-export const Portal = Symbol(__DEV__ ? 'Portal' : undefined)
-export const Suspense = Symbol(__DEV__ ? 'Suspense' : undefined)
-export const Text = Symbol(__DEV__ ? 'Text' : undefined)
-export const Comment = Symbol(__DEV__ ? 'Comment' : undefined)
+export const Fragment = __DEV__ ? Symbol('Fragment') : Symbol()
+export const Text = __DEV__ ? Symbol('Text') : Symbol()
+export const Comment = __DEV__ ? Symbol('Empty') : Symbol()
+export const Portal = __DEV__ ? Symbol('Portal') : Symbol()
+export const Suspense = __DEV__ ? Symbol('Suspense') : Symbol()
 
+// 声明 VNodeTypes 类型
 export type VNodeTypes =
   | string
-  | Component
+  | Function
+  | Object
   | typeof Fragment
   | typeof Portal
   | typeof Text
@@ -67,10 +64,14 @@ export interface VNode<HostNode = any, HostElement = any> {
   children: NormalizedChildren<HostNode, HostElement>
   component: ComponentInternalInstance | null
   suspense: SuspenseBoundary<HostNode, HostElement> | null
-  dirs: DirectiveBinding[] | null
 
   // DOM
   el: HostNode | null
+
+//Anchor 对象： Anchor 对象表示 HTML 超链接。
+// 在 HTML 文档中 <a> 标签每出现一次，就会创建 Anchor 对象。
+// 锚可用于创建指向另一个文档的链接（通过 href 属性），或者创建文档内的书签（通过 name 属性）。
+// 您可以通过搜索 Document 对象中的 anchors[] 数组来访问锚，或者使用 document.getElementById()。
   anchor: HostNode | null // fragment anchor
   target: HostElement | null // portal target
 
@@ -90,7 +91,6 @@ export interface VNode<HostNode = any, HostElement = any> {
 // structure would be stable. This allows us to skip most children diffing
 // and only worry about the dynamic nodes (indicated by patch flags).
 const blockStack: (VNode[] | null)[] = []
-let currentBlock: VNode[] | null = null
 
 // Open a block.
 // This must be called before `createBlock`. It cannot be part of `createBlock`
@@ -104,27 +104,10 @@ let currentBlock: VNode[] | null = null
 // disableTracking is true when creating a fragment block, since a fragment
 // always diffs its children.
 export function openBlock(disableTracking?: boolean) {
-  blockStack.push((currentBlock = disableTracking ? null : []))
+  blockStack.push(disableTracking ? null : [])
 }
 
-// Whether we should be tracking dynamic child nodes inside a block.
-// Only tracks when this value is > 0
-// We are not using a simple boolean because this value may need to be
-// incremented/decremented by nested usage of v-once (see below)
-let shouldTrack = 1
-
-// Block tracking sometimes needs to be disabled, for example during the
-// creation of a tree that needs to be cached by v-once. The compiler generates
-// code like this:
-//   _cache[1] || (
-//     setBlockTracking(-1),
-//     _cache[1] = createVNode(...),
-//     setBlockTracking(1),
-//     _cache[1]
-//   )
-export function setBlockTracking(value: number) {
-  shouldTrack += value
-}
+let shouldTrack = true
 
 // Create a block root vnode. Takes the same exact arguments as `createVNode`.
 // A block root keeps track of dynamic nodes within the block in the
@@ -136,60 +119,69 @@ export function createBlock(
   patchFlag?: number,
   dynamicProps?: string[]
 ): VNode {
-  // avoid a block with patchFlag tracking itself
-  shouldTrack--
+  // avoid a block with optFlag tracking itself
+  shouldTrack = false
   const vnode = createVNode(type, props, children, patchFlag, dynamicProps)
-  shouldTrack++
-  // save current block children on the block vnode
-  vnode.dynamicChildren = currentBlock || EMPTY_ARR
-  // close block
-  blockStack.pop()
-  currentBlock = blockStack[blockStack.length - 1] || null
-  // a block is always going to be patched, so track it as a child of its
-  // parent block
-  if (currentBlock !== null) {
-    currentBlock.push(vnode)
-  }
+  shouldTrack = true
+  const trackedNodes = blockStack.pop()
+  vnode.dynamicChildren =
+    trackedNodes && trackedNodes.length ? trackedNodes : EMPTY_ARR
+  // a block is always going to be patched
+  trackDynamicNode(vnode)
   return vnode
 }
 
-export function isVNode(value: any): value is VNode {
+export function isVNode(value: any): boolean {
   return value ? value._isVNode === true : false
 }
 
+// 创建虚拟DOM,VNode
 export function createVNode(
   type: VNodeTypes,
   props: { [key: string]: any } | null = null,
   children: unknown = null,
-  patchFlag: number = 0,
-  dynamicProps: string[] | null = null
+  patchFlag: number = 0,  // 变化
+  dynamicProps: string[] | null = null // 动态属性
 ): VNode {
-  // class & style normalization.
+  // class & style normalization.（class & style 序列化）
   if (props !== null) {
     // for reactive or proxy objects, we need to clone it to enable mutation.
+    // todo...
+    // 对于 reactive 或者 proxy 对象，我们需要克隆它来面对值改变的情况。
+    // proxy objects（是指通过 new Proxy 实现的双向绑定对象？？？）对象
+    // isReactive()-->返回的是 reactiveToRaw.has(value) || readonlyToRaw.has(value) 只读属性？？？computed？？？
     if (isReactive(props) || SetupProxySymbol in props) {
-      props = extend({}, props)
+      // 克隆props，有点像jquery的extend方法
+      props = extend({}, props) 
     }
-    let { class: klass, style } = props
-    if (klass != null && !isString(klass)) {
-      props.class = normalizeClass(klass)
+    // class normalization only needed if the vnode isn't generated by
+    // compiler-optimized code
+    if (props.class != null && !(patchFlag & PatchFlags.CLASS)) {
+      props.class = normalizeClass(props.class)
     }
+    let { style } = props
+    // 样式
     if (style != null) {
-      // reactive state objects need to be cloned since they are likely to be
-      // mutated
+      // reactive state objects need to be cloned since they are likely to be mutated
+      // 跟克隆 prop 同理
       if (isReactive(style) && !isArray(style)) {
         style = extend({}, style)
       }
+      // 序列化 style，数组返回{下标：值}， 对象返回{key：value}
       props.style = normalizeStyle(style)
     }
   }
 
   // encode the vnode type information into a bitmap
+  // 把 VNode 类型的信息编码成位图
   const shapeFlag = isString(type)
+  // ShapeFlags VNode的type string => ELEMENT
     ? ShapeFlags.ELEMENT
     : isObject(type)
+    // object => STATEFUL_COMPONENT
       ? ShapeFlags.STATEFUL_COMPONENT
       : isFunction(type)
+      // function => FUNCTIONAL_COMPONENT
         ? ShapeFlags.FUNCTIONAL_COMPONENT
         : 0
 
@@ -197,13 +189,14 @@ export function createVNode(
     _isVNode: true,
     type,
     props,
-    key: (props !== null && props.key) || null,
-    ref: (props !== null && props.ref) || null,
+    // key, ref 区分唯一
+    key: (props && props.key) || null,
+    ref: (props && props.ref) || null,
     children: null,
     component: null,
     suspense: null,
-    dirs: null,
     el: null,
+    // 锚点
     anchor: null,
     target: null,
     shapeFlag,
@@ -212,40 +205,41 @@ export function createVNode(
     dynamicChildren: null,
     appContext: null
   }
-
+  // 序列化 children 
+  // chilren 类型 ： TEXT_CHILDREN \ ARRAY_CHILDREN \ SLOTS_CHILDREN 
   normalizeChildren(vnode, children)
 
   // presence of a patch flag indicates this node needs patching on updates.
   // component nodes also should always be patched, because even if the
   // component doesn't need to update, it needs to persist the instance on to
   // the next vnode so that it can be properly unmounted later.
+  // 当前 VNode 的 patch 标识 说明当前 node 是否需要更新
+  // 如果是 component node 是需要做 patch(补丁)，因为即使它不需要更新，它也需要将实例保存到下一个 vnode 上，以便之后可以正确的 unmounted.
   if (
-    shouldTrack > 0 &&
-    currentBlock !== null &&
-    (patchFlag > 0 ||
-      shapeFlag & ShapeFlags.STATEFUL_COMPONENT ||
-      shapeFlag & ShapeFlags.FUNCTIONAL_COMPONENT)
+    shouldTrack &&
+    (patchFlag ||
+      shapeFlag & ShapeFlags.STATEFUL_COMPONENT || // shapeFlag & ShapeFlags.STATEFUL_COMPONENT 按位运算 意思是当前的shapeFlag是STATEFUL_COMPONENT类型吗？（按位做与运算，只有当当前值 shapeFlag 和 ShapeFlags.STATEFUL_COMPONENT完全一致才能得到 true 的结果）
+      shapeFlag & ShapeFlags.FUNCTIONAL_COMPONENT) // shapeFlag & ShapeFlags.FUNCTIONAL_COMPONENT 按位运算 意思是当前的shapeFlag是FUNCTIONAL_COMPONENT类型吗？
   ) {
-    currentBlock.push(vnode)
+    trackDynamicNode(vnode)
   }
 
   return vnode
 }
 
-export function cloneVNode<T, U>(
-  vnode: VNode<T, U>,
-  extraProps?: Data
-): VNode<T, U> {
-  // This is intentionally NOT using spread or extend to avoid the runtime
-  // key enumeration cost.
+// 跟踪 动态 VNode
+function trackDynamicNode(vnode: VNode) {
+  const currentBlockDynamicNodes = blockStack[blockStack.length - 1]
+  if (currentBlockDynamicNodes != null) {
+    currentBlockDynamicNodes.push(vnode)
+  }
+}
+
+export function cloneVNode(vnode: VNode): VNode {
   return {
     _isVNode: true,
     type: vnode.type,
-    props: extraProps
-      ? vnode.props
-        ? mergeProps(vnode.props, extraProps)
-        : extraProps
-      : vnode.props,
+    props: vnode.props,
     key: vnode.key,
     ref: vnode.ref,
     children: vnode.children,
@@ -255,7 +249,6 @@ export function cloneVNode<T, U>(
     dynamicProps: vnode.dynamicProps,
     dynamicChildren: vnode.dynamicChildren,
     appContext: vnode.appContext,
-    dirs: vnode.dirs,
 
     // these should be set to null since they should only be present on
     // mounted VNodes. If they are somehow not null, this means we have
@@ -267,22 +260,7 @@ export function cloneVNode<T, U>(
   }
 }
 
-export function createTextVNode(text: string = ' ', flag: number = 0): VNode {
-  return createVNode(Text, null, text, flag)
-}
-
-export function createCommentVNode(
-  text: string = '',
-  // when used as the v-else branch, the comment node must be created as a
-  // block to ensure correct updates.
-  asBlock: boolean = false
-): VNode {
-  return asBlock
-    ? createBlock(Comment, null, text)
-    : createVNode(Comment, null, text)
-}
-
-export function normalizeVNode<T, U>(child: VNodeChild<T, U>): VNode<T, U> {
+export function normalizeVNode(child: VNodeChild): VNode {
   if (child == null) {
     // empty placeholder
     return createVNode(Comment)
@@ -315,7 +293,7 @@ export function normalizeChildren(vnode: VNode, children: unknown) {
     type = ShapeFlags.TEXT_CHILDREN
   }
   vnode.children = children as NormalizedChildren
-  vnode.shapeFlag |= type
+  vnode.shapeFlag |= type // that mean vnode.shapeFlag = vnode.shapeFlag | type
 }
 
 function normalizeStyle(
