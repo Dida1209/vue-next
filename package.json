@@ -24,9 +24,14 @@
       "git add"
     ]
   },
+  "config": {
+    "commitizen": {
+      "path": "./node_modules/cz-conventional-changelog"
+    }
+  },
   "devDependencies": {
     "@microsoft/api-extractor": "^7.3.9",
-    "@types/jest": "^24.0.18",
+    "@types/jest": "^24.0.20",
     "chalk": "^2.4.2",
     "execa": "^2.0.4",
     "fs-extra": "^8.1.0",
@@ -44,5 +49,9 @@
     "ts-jest": "^24.0.2",
     "typescript": "^3.5.3",
     "yorkie": "^2.0.0"
+  },
+  "dependencies": {
+    "git-cz": "^3.3.0",
+    "jest-extended": "^0.11.2"
   }
 }

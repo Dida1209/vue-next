@@ -31,6 +31,7 @@ const nonReactiveValues: WeakSet<any> = new WeakSet()
 const collectionTypes: Set<any> = new Set([Set, Map, WeakMap, WeakSet])
 const observableValueRE = /^\[object (?:Object|Array|Map|Set|WeakMap|WeakSet)\]$/
 
+// 判断不是 vue实例、不是 vnode节点、不是对象.数组.Map.Set...\不是reactiveValues
 const canObserve = (value: any): boolean => {
   return (
     !value._isVue &&
@@ -39,7 +40,7 @@ const canObserve = (value: any): boolean => {
     !nonReactiveValues.has(value)
   )
 }
-
+// reactive 函数的入参是一个object 类型的数据，而返回则是一个 UnwrapNestedRefs 类型的对象（被解嵌套以后的响应式对象）
 export function reactive<T extends object>(target: T): UnwrapNestedRefs<T>
 export function reactive(target: object) {
   // if trying to observe a readonly proxy, return the readonly version.
@@ -52,8 +53,8 @@ export function reactive(target: object) {
   }
   return createReactiveObject(
     target,
-    rawToReactive,
-    reactiveToRaw,
+    rawToReactive, // toProxy 弱引用的 map 结构，用于保存原始数据对应的响应式数据
+    reactiveToRaw, // toRaw 弱引用的 map 结构，用于保存响应式数据对应的原始数据
     mutableHandlers,
     mutableCollectionHandlers
   )
